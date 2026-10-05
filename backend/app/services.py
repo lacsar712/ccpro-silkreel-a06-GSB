@@ -10,6 +10,11 @@ class RuleError(ValueError):
     pass
 
 
+class QuotaError(ValueError):
+    """小箴剩余圈数不足（已为 0），汤温不得入库。"""
+    pass
+
+
 def latest_temp(basin: Basin) -> float | None:
     if not basin.readings:
         return None

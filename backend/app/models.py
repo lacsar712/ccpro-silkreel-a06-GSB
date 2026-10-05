@@ -1,6 +1,15 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -32,7 +41,10 @@ class Filature(Base):
 
 class Basin(Base):
     __tablename__ = "basins"
-    __table_args__ = (UniqueConstraint("filature_id", "code"),)
+    __table_args__ = (
+        UniqueConstraint("filature_id", "code"),
+        CheckConstraint("remaining_rounds >= 0", name="ck_basins_remaining_rounds_nonneg"),
+    )
 
     STATUS_SOAKING = "soaking"
     STATUS_REELING = "reeling"
@@ -44,6 +56,11 @@ class Basin(Base):
     status: Mapped[str] = mapped_column(String(20), default=STATUS_SOAKING)
     ring_index: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # 小箴配额：每盆剩余可登记汤温的圈数；不小于 0，扣到 0 即不得再登汤温。
+    remaining_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    quota_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
     filature: Mapped[Filature] = relationship(back_populates="basins")
     readings: Mapped[list["BathReading"]] = relationship(back_populates="basin")
 

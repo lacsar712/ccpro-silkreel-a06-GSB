@@ -58,6 +58,37 @@ button, input {
   margin: 4px 6px 4px 0;
 }
 .err { color: #b42318; }
+.ok { color: #2f7a46; }
 .hint { color: #6b5a48; font-size: 0.92em; }
 label { display: block; margin: 8px 0; }
-.topbar { display: flex; justify-content: space-between; align-items: baseline; }
+.topbar { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; align-items: center; }
+.tab { background: #efe6d2; border: 1px solid #d9c9a3; border-radius: 8px 8px 0 0; }
+.tab.active { background: #fff; border-color: var(--gold); font-weight: 600; }
+.basin .rounds {
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.92;
+  border-top: 1px solid rgba(255, 255, 255, 0.6);
+  padding-top: 2px;
+}
+.quota-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.filter { display: flex; gap: 6px; }
+.quota-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e4d8bf;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.quota-table th, .quota-table td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid #efe6d2;
+}
+.quota-table th { background: #f6efdd; font-weight: 600; }
+.quota-table td.num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.quota-table tr.zero td.num { color: #b42318; }
+.add-input { width: 92px; }
+button:disabled, input:disabled { opacity: 0.55; cursor: not-allowed; }

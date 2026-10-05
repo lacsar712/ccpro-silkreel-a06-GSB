@@ -1,11 +1,10 @@
 from quart import Quart, g, jsonify, request
-from quart.helpers import make_response
 
 from app.db import SessionLocal
 from app.models import Basin
 from app.repositories import BasinRepo, UserRepo
 from app.security import make_token, parse_token, verify_password
-from app.services import RuleError, assert_can_set_status, latest_temp
+from app.services import QuotaError, RuleError, assert_can_set_status, latest_temp
 
 app = Quart(__name__)
 
@@ -33,6 +32,15 @@ async def load_user():
 def require_user():
     if g.user is None:
         return jsonify({"detail": "未登录"}), 401
+    return None
+
+
+def require_admin():
+    denied = require_user()
+    if denied:
+        return denied
+    if g.user.role != "admin":
+        return jsonify({"detail": "仅管理员可补圈"}), 403
     return None
 
 
@@ -64,6 +72,16 @@ async def me():
     return {"username": g.user.username, "role": g.user.role}
 
 
+def _quota_json(basin: Basin) -> dict:
+    return {
+        "id": basin.id,
+        "code": basin.code,
+        "status": basin.status,
+        "remainingRounds": basin.remaining_rounds,
+        "quotaUpdatedAt": basin.quota_updated_at.isoformat() if basin.quota_updated_at else None,
+    }
+
+
 def _basin_json(basin: Basin) -> dict:
     return {
         "id": basin.id,
@@ -72,6 +90,7 @@ def _basin_json(basin: Basin) -> dict:
         "ringIndex": basin.ring_index,
         "latestTempC": latest_temp(basin),
         "readingCount": len(basin.readings or []),
+        "remainingRounds": basin.remaining_rounds,
     }
 
 
@@ -92,6 +111,17 @@ async def board():
         }
 
 
+@app.route("/api/quotas")
+async def quotas():
+    denied = require_user()
+    if denied:
+        return denied
+    q = (request.args.get("q") or "").strip()
+    async with SessionLocal() as session:
+        basins = await BasinRepo(session).list_quotas(q or None)
+        return {"basins": [_quota_json(b) for b in basins]}
+
+
 @app.route("/api/basins/<int:basin_id>/readings", methods=["POST"])
 async def add_reading(basin_id: int):
     denied = require_user()
@@ -104,12 +134,33 @@ async def add_reading(basin_id: int):
         return jsonify({"detail": "汤温必须是数字"}), 400
     async with SessionLocal() as session:
         repo = BasinRepo(session)
-        basin = await repo.get(basin_id)
-        if basin is None:
+        if not await repo.exists(basin_id):
             return jsonify({"detail": "盆不存在"}), 404
-        await repo.add_reading(basin, temp, g.user.username)
+        try:
+            await repo.register_reading(basin_id, temp, g.user.username)
+        except QuotaError as exc:
+            # 闸门未放行：整事务回滚，汤温绝不入库。
+            await session.rollback()
+            return jsonify({"detail": str(exc)}), 400
         basin = await repo.get(basin_id)
         return _basin_json(basin)
+
+
+@app.route("/api/basins/<int:basin_id>/quota", methods=["POST"])
+async def add_quota(basin_id: int):
+    denied = require_admin()
+    if denied:
+        return denied
+    body = await request.get_json(force=True)
+    raw = (body or {}).get("add")
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return jsonify({"detail": "补圈数须为大于 0 的整数"}), 400
+    async with SessionLocal() as session:
+        repo = BasinRepo(session)
+        if not await repo.add_rounds(basin_id, raw):
+            return jsonify({"detail": "盆不存在"}), 404
+        basin = await repo.get(basin_id)
+        return _quota_json(basin)
 
 
 @app.route("/api/basins/<int:basin_id>/status", methods=["POST"])

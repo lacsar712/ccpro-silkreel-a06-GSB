@@ -6,6 +6,16 @@ from app.db import SessionLocal
 from app.models import Basin, BathReading, Filature, User, utcnow
 from app.security import hash_password
 
+# 盆号 -> 初始剩余圈数。要求种子里恰有一盆为 1（甲-2），供并发登记对拍。
+DEMO_ROUNDS = {
+    "甲-1": 3,
+    "甲-2": 1,
+    "乙-1": 0,
+    "乙-2": 2,
+    "丙-1": 0,
+    "丙-2": 0,
+}
+
 
 async def seed_demo() -> None:
     async with SessionLocal() as session:
@@ -28,6 +38,14 @@ async def seed_demo() -> None:
 
         mill = (await session.execute(select(Filature))).scalars().first()
         if mill:
+            # 旧库回填：只补从未动过配额（quota_updated_at 为空）的演示盆，
+            # 管理员补过圈或缫丝工扣过圈的盆一律不碰。
+            basins = (
+                await session.execute(select(Basin).where(Basin.filature_id == mill.id))
+            ).scalars().all()
+            for basin in basins:
+                if basin.quota_updated_at is None and basin.code in DEMO_ROUNDS:
+                    basin.remaining_rounds = DEMO_ROUNDS[basin.code]
             await session.commit()
             return
 
@@ -44,7 +62,13 @@ async def seed_demo() -> None:
             ("丙-2", Basin.STATUS_REELED, 41.0, 5),
         ]
         for code, status, temp, idx in specs:
-            basin = Basin(filature_id=mill.id, code=code, status=status, ring_index=idx)
+            basin = Basin(
+                filature_id=mill.id,
+                code=code,
+                status=status,
+                ring_index=idx,
+                remaining_rounds=DEMO_ROUNDS[code],
+            )
             session.add(basin)
             await session.flush()
             if temp is not None:
