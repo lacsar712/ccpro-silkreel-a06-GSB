@@ -1,6 +1,15 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -46,6 +55,7 @@ class Basin(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     filature: Mapped[Filature] = relationship(back_populates="basins")
     readings: Mapped[list["BathReading"]] = relationship(back_populates="basin")
+    quota: Mapped["ReelQuota"] = relationship(back_populates="basin", uselist=False)
 
 
 class BathReading(Base):
@@ -57,3 +67,20 @@ class BathReading(Base):
     water_temp_c: Mapped[float] = mapped_column(Float)
     operator: Mapped[str] = mapped_column(String(64), default="")
     basin: Mapped[Basin] = relationship(back_populates="readings")
+
+
+class ReelQuota(Base):
+    """每盆一把的小箴配额：剩余圈数，登记一次汤温须在同事务内扣 1。"""
+
+    __tablename__ = "reel_quotas"
+    __table_args__ = (
+        CheckConstraint("remaining_turns >= 0", name="ck_reel_quota_remaining_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    basin_id: Mapped[int] = mapped_column(ForeignKey("basins.id"), unique=True)
+    remaining_turns: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+    basin: Mapped[Basin] = relationship(back_populates="quota")

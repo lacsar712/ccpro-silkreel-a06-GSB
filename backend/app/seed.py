@@ -3,8 +3,11 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Basin, BathReading, Filature, User, utcnow
+from app.models import Basin, BathReading, Filature, ReelQuota, User, utcnow
 from app.security import hash_password
+
+DEFAULT_QUOTA_TURNS = 5
+ONE_TURN_BASIN_CODE = "甲-2"
 
 
 async def seed_demo() -> None:
@@ -27,33 +30,44 @@ async def seed_demo() -> None:
             worker.role = "worker"
 
         mill = (await session.execute(select(Filature))).scalars().first()
-        if mill:
-            await session.commit()
-            return
-
-        mill = Filature(name="江口缫丝坞", riverside="东津渡")
-        session.add(mill)
-        await session.flush()
-        now = utcnow()
-        specs = [
-            ("甲-1", Basin.STATUS_REELING, 40.5, 0),
-            ("甲-2", Basin.STATUS_SOAKING, None, 1),
-            ("乙-1", Basin.STATUS_REELED, 39.2, 2),
-            ("乙-2", Basin.STATUS_REELING, 36.0, 3),
-            ("丙-1", Basin.STATUS_SOAKING, None, 4),
-            ("丙-2", Basin.STATUS_REELED, 41.0, 5),
-        ]
-        for code, status, temp, idx in specs:
-            basin = Basin(filature_id=mill.id, code=code, status=status, ring_index=idx)
-            session.add(basin)
+        if mill is None:
+            mill = Filature(name="江口缫丝坞", riverside="东津渡")
+            session.add(mill)
             await session.flush()
-            if temp is not None:
-                session.add(
-                    BathReading(
-                        basin_id=basin.id,
-                        water_temp_c=temp,
-                        operator="worker",
-                        taken_at=now - timedelta(hours=2),
+            now = utcnow()
+            specs = [
+                ("甲-1", Basin.STATUS_REELING, 40.5, 0),
+                ("甲-2", Basin.STATUS_SOAKING, None, 1),
+                ("乙-1", Basin.STATUS_REELED, 39.2, 2),
+                ("乙-2", Basin.STATUS_REELING, 36.0, 3),
+                ("丙-1", Basin.STATUS_SOAKING, None, 4),
+                ("丙-2", Basin.STATUS_REELED, 41.0, 5),
+            ]
+            for code, status, temp, idx in specs:
+                basin = Basin(filature_id=mill.id, code=code, status=status, ring_index=idx)
+                session.add(basin)
+                await session.flush()
+                if temp is not None:
+                    session.add(
+                        BathReading(
+                            basin_id=basin.id,
+                            water_temp_c=temp,
+                            operator="worker",
+                            taken_at=now - timedelta(hours=2),
+                        )
                     )
-                )
+
+        # 每盆一把小箴配额；幂等补齐（旧卷重启也不缺配额）。
+        basins = list(
+            (
+                await session.execute(select(Basin).order_by(Basin.ring_index, Basin.id))
+            ).scalars()
+        )
+        have = set((await session.execute(select(ReelQuota.basin_id))).scalars())
+        for basin in basins:
+            if basin.id in have:
+                continue
+            turns = 1 if basin.code == ONE_TURN_BASIN_CODE else DEFAULT_QUOTA_TURNS
+            session.add(ReelQuota(basin_id=basin.id, remaining_turns=turns))
+
         await session.commit()

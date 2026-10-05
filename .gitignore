@@ -6,3 +6,4 @@ dist/
 .vite
 *.egg-info/
 .pytest_cache/
+.venv/

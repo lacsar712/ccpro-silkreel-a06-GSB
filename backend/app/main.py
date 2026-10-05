@@ -3,7 +3,7 @@ from quart.helpers import make_response
 
 from app.db import SessionLocal
 from app.models import Basin
-from app.repositories import BasinRepo, UserRepo
+from app.repositories import BasinRepo, QuotaExhausted, UserRepo
 from app.security import make_token, parse_token, verify_password
 from app.services import RuleError, assert_can_set_status, latest_temp
 
@@ -33,6 +33,15 @@ async def load_user():
 def require_user():
     if g.user is None:
         return jsonify({"detail": "未登录"}), 401
+    return None
+
+
+def require_admin():
+    denied = require_user()
+    if denied:
+        return denied
+    if g.user.role != "admin":
+        return jsonify({"detail": "仅管理员可补圈"}), 403
     return None
 
 
@@ -72,6 +81,12 @@ def _basin_json(basin: Basin) -> dict:
         "ringIndex": basin.ring_index,
         "latestTempC": latest_temp(basin),
         "readingCount": len(basin.readings or []),
+        "remainingTurns": basin.quota.remaining_turns if basin.quota is not None else None,
+        "quotaUpdatedAt": (
+            basin.quota.updated_at.isoformat()
+            if basin.quota is not None and basin.quota.updated_at is not None
+            else None
+        ),
     }
 
 
@@ -92,6 +107,54 @@ async def board():
         }
 
 
+@app.route("/api/quotas")
+async def list_quotas():
+    denied = require_user()
+    if denied:
+        return denied
+    code = (request.args.get("q") or "").strip() or None
+    async with SessionLocal() as session:
+        pairs = await BasinRepo(session).quotas(code)
+        return {
+            "items": [
+                {
+                    "basinId": basin.id,
+                    "code": basin.code,
+                    "status": basin.status,
+                    "remainingTurns": quota.remaining_turns,
+                    "updatedAt": quota.updated_at.isoformat() if quota.updated_at else None,
+                }
+                for basin, quota in pairs
+            ]
+        }
+
+
+@app.route("/api/basins/<int:basin_id>/quotas/refill", methods=["POST"])
+async def refill_quota(basin_id: int):
+    denied = require_admin()
+    if denied:
+        return denied
+    body = await request.get_json(force=True)
+    try:
+        add_turns = int((body or {}).get("addTurns"))
+    except (TypeError, ValueError):
+        return jsonify({"detail": "补圈数必须是整数"}), 400
+    if add_turns <= 0:
+        return jsonify({"detail": "补圈数必须大于 0"}), 400
+    async with SessionLocal() as session:
+        try:
+            remaining, updated_at = await BasinRepo(session).refill_quota(
+                basin_id, add_turns
+            )
+        except LookupError:
+            return jsonify({"detail": "盆不存在"}), 404
+        return {
+            "basinId": basin_id,
+            "remainingTurns": remaining,
+            "updatedAt": updated_at.isoformat() if updated_at else None,
+        }
+
+
 @app.route("/api/basins/<int:basin_id>/readings", methods=["POST"])
 async def add_reading(basin_id: int):
     denied = require_user()
@@ -104,10 +167,12 @@ async def add_reading(basin_id: int):
         return jsonify({"detail": "汤温必须是数字"}), 400
     async with SessionLocal() as session:
         repo = BasinRepo(session)
-        basin = await repo.get(basin_id)
-        if basin is None:
+        try:
+            await repo.consume_and_add_reading(basin_id, temp, g.user.username)
+        except LookupError:
             return jsonify({"detail": "盆不存在"}), 404
-        await repo.add_reading(basin, temp, g.user.username)
+        except QuotaExhausted:
+            return jsonify({"detail": "该盆小箴配额已用完，剩余 0 圈，不能再登记汤温"}), 400
         basin = await repo.get(basin_id)
         return _basin_json(basin)
 

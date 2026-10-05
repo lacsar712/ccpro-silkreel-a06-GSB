@@ -18,7 +18,7 @@ function Login({ onOk }) {
         body: JSON.stringify({ username, password }),
       });
       setToken(data.access_token);
-      onOk();
+      onOk(data.user.role);
     } catch (ex) {
       setErr(ex.message);
     }
@@ -44,6 +44,33 @@ function Login({ onOk }) {
   );
 }
 
+function Shell({ role, view, onNav, onLogout, children }) {
+  return (
+    <div class="yard">
+      <div class="topbar">
+        <div>
+          <h1>江口缫丝坞</h1>
+          <nav class="nav">
+            <button class={view === "yard" ? "active" : ""} onClick={() => onNav("yard")}>
+              环盆作业台
+            </button>
+            <button class={view === "quota" ? "active" : ""} onClick={() => onNav("quota")}>
+              小箴配额
+            </button>
+          </nav>
+        </div>
+        <div class="who">
+          <span>
+            {role === "admin" ? "管理员" : "缫丝工"}
+          </span>
+          <button onClick={onLogout}>退出</button>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function Yard() {
   const [board, setBoard] = useState(null);
   const [picked, setPicked] = useState(null);
@@ -63,16 +90,16 @@ function Yard() {
   }, []);
 
   if (!board) {
-    return (
-      <div class="yard">
-        {err || "装载环盆…"}
-      </div>
-    );
+    return <div>{err || "装载环盆…"}</div>;
   }
 
   const n = board.basins.length;
   async function writeTemp() {
     setErr("");
+    if (Number.isInteger(picked.remainingTurns) && picked.remainingTurns <= 0) {
+      setErr("该盆小箴配额已用完，剩余 0 圈，不能再登记汤温");
+      return;
+    }
     try {
       const row = await api(`/api/basins/${picked.id}/readings`, {
         method: "POST",
@@ -82,6 +109,7 @@ function Yard() {
       setPicked(row);
     } catch (ex) {
       setErr(ex.message);
+      await refresh();
     }
   }
   async function setStatus(status) {
@@ -98,36 +126,28 @@ function Yard() {
     }
   }
 
+  const noTurns =
+    picked && Number.isInteger(picked.remainingTurns) && picked.remainingTurns <= 0;
+
   return (
-    <div class="yard">
-      <div class="topbar">
-        <div>
-          <h1>{board.filature}</h1>
-          <p>{board.riverside} · 点盆登记汤温；已缫完须最近汤温 38～42℃</p>
-        </div>
-        <button
-          onClick={() => {
-            clearToken();
-            location.reload();
-          }}
-        >
-          退出
-        </button>
-      </div>
+    <div>
+      <p class="subline">东津渡 · 点盆登记汤温；已缫完须最近汤温 38～42℃；每登一条扣 1 圈小箴配额</p>
       <div class="ring">
         {board.basins.map((b, i) => {
           const angle = (Math.PI * 2 * i) / n - Math.PI / 2;
           const left = 50 + Math.cos(angle) * 38;
           const top = 50 + Math.sin(angle) * 38;
+          const empty = Number.isInteger(b.remainingTurns) && b.remainingTurns <= 0;
           return (
             <button
               key={b.id}
-              class={`basin ${b.status}`}
+              class={`basin ${b.status} ${empty ? "quota-empty" : ""}`}
               style={{ left: `${left}%`, top: `${top}%` }}
               onClick={() => setPicked(b)}
             >
               <strong>{b.code}</strong>
               <span>{STATUS_LABEL[b.status]}</span>
+              <span class="turns">余 {empty ? 0 : b.remainingTurns ?? "—"} 圈</span>
             </button>
           );
         })}
@@ -137,9 +157,15 @@ function Yard() {
           <h3>
             {picked.code} · {STATUS_LABEL[picked.status]}
           </h3>
-          <p>最近汤温：{picked.latestTempC ?? "无"} ℃ · 记录 {picked.readingCount} 次</p>
-          <input value={temp} onInput={(e) => setTemp(e.target.value)} />
-          <button onClick={writeTemp}>登记汤温</button>
+          <p>
+            最近汤温：{picked.latestTempC ?? "无"} ℃ · 记录 {picked.readingCount} 次 ·
+            小箴剩余 <strong class={noTurns ? "zero" : ""}>{picked.remainingTurns ?? "—"}</strong> 圈
+          </p>
+          <input value={temp} onInput={(e) => setTemp(e.target.value)} disabled={noTurns} />
+          <button onClick={writeTemp} disabled={noTurns}>
+            登记汤温
+          </button>
+          {noTurns && <p class="err">该盆小箴配额已用完，剩余 0 圈，不能再登记汤温；请管理员在「小箴配额」补圈。</p>}
           <div>
             <button onClick={() => setStatus("soaking")}>浸茧</button>
             <button onClick={() => setStatus("reeling")}>缫丝中</button>
@@ -152,9 +178,184 @@ function Yard() {
   );
 }
 
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("zh-CN", { hour12: false });
+}
+
+function Quotas({ role }) {
+  const [items, setItems] = useState(null);
+  const [q, setQ] = useState("");
+  const [draft, setDraft] = useState({});
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+
+  async function load(keyword = q) {
+    setErr("");
+    setNote("");
+    try {
+      const data = await api(`/api/quotas${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`);
+      setItems(data.items);
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }
+
+  useEffect(() => {
+    load("");
+  }, []);
+
+  async function refill(basinId) {
+    setErr("");
+    setNote("");
+    const raw = String(draft[basinId] ?? "").trim();
+    const addTurns = Number(raw);
+    if (!Number.isInteger(addTurns) || addTurns <= 0) {
+      setErr("补圈数必须是大于 0 的整数");
+      return;
+    }
+    try {
+      const row = await api(`/api/basins/${basinId}/quotas/refill`, {
+        method: "POST",
+        body: JSON.stringify({ addTurns }),
+      });
+      setItems((prev) =>
+        (prev || []).map((it) =>
+          it.basinId === basinId
+            ? { ...it, remainingTurns: row.remainingTurns, updatedAt: row.updatedAt }
+            : it
+        )
+      );
+      setDraft((prev) => ({ ...prev, [basinId]: "" }));
+      setNote(`已补 ${addTurns} 圈，当前剩余 ${row.remainingTurns} 圈`);
+    } catch (ex) {
+      setErr(ex.message);
+    }
+  }
+
+  return (
+    <div class="quota-page">
+      <p class="subline">每盆一把小箴配额；登记汤温成功即在同一事务内扣 1 圈，扣到 0 即挡。改盆态不扣圈。</p>
+      <div class="filter">
+        <input
+          placeholder="按盆号筛，如 甲"
+          value={q}
+          onInput={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && load()}
+        />
+        <button onClick={() => load()}>筛选</button>
+        <button
+          onClick={() => {
+            setQ("");
+            load("");
+          }}
+        >
+          全部
+        </button>
+      </div>
+      {err && <p class="err">{err}</p>}
+      {note && <p class="ok">{note}</p>}
+      {items === null ? (
+        <p>装载配额…</p>
+      ) : items.length === 0 ? (
+        <p>没有匹配的盆。</p>
+      ) : (
+        <table class="quota-table">
+          <thead>
+            <tr>
+              <th>盆</th>
+              <th>盆态</th>
+              <th>剩余圈数</th>
+              <th>更新时刻</th>
+              {role === "admin" && <th>管理员补圈</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it) => {
+              const empty = it.remainingTurns <= 0;
+              return (
+                <tr key={it.basinId} class={empty ? "row-empty" : ""}>
+                  <td>{it.code}</td>
+                  <td>{STATUS_LABEL[it.status] || it.status}</td>
+                  <td class={empty ? "zero" : ""}>{it.remainingTurns}</td>
+                  <td>{fmtTime(it.updatedAt)}</td>
+                  {role === "admin" && (
+                    <td>
+                      <input
+                        class="refill-input"
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="圈数"
+                        value={draft[it.basinId] ?? ""}
+                        onInput={(e) =>
+                          setDraft((prev) => ({ ...prev, [it.basinId]: e.target.value }))
+                        }
+                        onKeyDown={(e) => e.key === "Enter" && refill(it.basinId)}
+                      />
+                      <button onClick={() => refill(it.basinId)}>补圈</button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {role !== "admin" && <p class="hint">缫丝工可查看配额；补圈请联系管理员。</p>}
+    </div>
+  );
+}
+
 function App() {
-  const [ready, setReady] = useState(Boolean(token()));
-  return ready ? <Yard /> : <Login onOk={() => setReady(true)} />;
+  const [authed, setAuthed] = useState(Boolean(token()));
+  const [ready, setReady] = useState(false);
+  const [role, setRole] = useState("worker");
+  const [view, setView] = useState("yard");
+
+  useEffect(() => {
+    if (!authed) return;
+    setReady(false);
+    api("/api/auth/me")
+      .then((me) => {
+        setRole(me.role);
+        setReady(true);
+      })
+      .catch(() => {
+        clearToken();
+        setAuthed(false);
+      });
+  }, [authed]);
+
+  if (!authed) {
+    return (
+      <Login
+        onOk={(r) => {
+          setRole(r);
+          setReady(true);
+          setAuthed(true);
+        }}
+      />
+    );
+  }
+  if (!ready) {
+    return <div class="yard">装载…</div>;
+  }
+  return (
+    <Shell
+      role={role}
+      view={view}
+      onNav={setView}
+      onLogout={() => {
+        clearToken();
+        setView("yard");
+        setAuthed(false);
+      }}
+    >
+      {view === "quota" ? <Quotas role={role} /> : <Yard />}
+    </Shell>
+  );
 }
 
 render(<App />, document.getElementById("app"));

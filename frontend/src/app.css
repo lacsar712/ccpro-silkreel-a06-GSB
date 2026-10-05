@@ -58,6 +58,56 @@ button, input {
   margin: 4px 6px 4px 0;
 }
 .err { color: #b42318; }
+.ok { color: #2f7d46; }
 .hint { color: #6b5a48; font-size: 0.92em; }
 label { display: block; margin: 8px 0; }
-.topbar { display: flex; justify-content: space-between; align-items: baseline; }
+.topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.topbar h1 { margin-bottom: 6px; }
+.nav { display: flex; gap: 6px; }
+.nav button {
+  margin: 0;
+  border: 1px solid #d8c79a;
+  background: #fbf5e6;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+}
+.nav button.active {
+  background: var(--gold);
+  color: #fff;
+  border-color: var(--gold);
+}
+.who { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.subline { color: #6b5a48; }
+.basin .turns {
+  margin-top: 2px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.basin.quota-empty { opacity: 0.55; filter: grayscale(0.4); }
+.zero { color: #b42318; font-weight: 700; }
+.quota-page .filter { display: flex; gap: 6px; margin: 10px 0 14px; flex-wrap: wrap; }
+.quota-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e4d8bf;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.quota-table th, .quota-table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid #efe6d2;
+}
+.quota-table th {
+  background: #f6ecd2;
+  font-weight: 600;
+}
+.quota-table tr.row-empty td { background: #fbf1ef; }
+.refill-input { width: 84px; }
+button:disabled, input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
